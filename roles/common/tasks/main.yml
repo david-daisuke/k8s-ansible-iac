@@ -1,0 +1,101 @@
+---
+- name: 1. SWAPを無効化する (即時反映)
+  command: swapoff -a
+  when: ansible_swaptotal_mb > 0
+
+- name: 2. /etc/fstab から SWAP エントリをコメントアウト
+  replace:
+    path: /etc/fstab
+    regexp: '^([^#\s]+\s+[^#\s]+\s+swap\s+.*)$'
+    replace: '# \1'
+
+- name: 3. カーネルモジュールの読み込み設定を作成
+  copy:
+    dest: /etc/modules-load.d/k8s.conf
+    content: |
+      overlay
+      br_netfilter
+
+- name: 4. カーネルモジュールをロード
+  modprobe:
+    name: "{{ item }}"
+    state: present
+  loop:
+    - overlay
+    - br_netfilter
+
+- name: 5. Kubernetes用の sysctl パラメータを設定
+  sysctl:
+    name: "{{ item.key }}"
+    value: "{{ item.value }}"
+    state: present
+    sysctl_file: /etc/sysctl.d/k8s.conf
+    reload: yes
+  loop:
+    - { key: 'net.bridge.bridge-nf-call-iptables', value: '1' }
+    - { key: 'net.bridge.bridge-nf-call-ip6tables', value: '1' }
+    - { key: 'net.ipv4.ip_forward', value: '1' }
+
+- name: 6. 前提パッケージをインストール
+  apt:
+    name: [apt-transport-https, ca-certificates, curl, gnupg, lsb-release]
+    state: present
+    update_cache: yes
+
+- name: 7. containerd をインストール
+  apt:
+    name: containerd
+    state: present
+
+- name: 8. containerd 設定ディレクトリを作成
+  file:
+    path: /etc/containerd
+    state: directory
+
+- name: 9. containerd 設定を生成し SystemdCgroup を有効化
+  shell: |
+    containerd config default > /etc/containerd/config.toml
+    sed -i 's/SystemdCgroup = false/SystemdCgroup = true/g' /etc/containerd/config.toml
+  notify: restart containerd
+
+- name: 10. Kubernetes APTキーリング用ディレクトリを作成
+  file:
+    path: /etc/apt/keyrings
+    state: directory
+    mode: '0755'
+
+- name: 11. Kubernetes APTリポジトリのGPGキーを取得
+  get_url:
+    url: "https://pkgs.k8s.io/core:/stable:/v{{ k8s_version }}/deb/Release.key"
+    dest: "/etc/apt/keyrings/kubernetes-apt-keyring.asc"
+    mode: '0644'
+    force: yes
+
+- name: 12. Kubernetes APTリポジトリを追加
+  apt_repository:
+    repo: "deb [signed-by=/etc/apt/keyrings/kubernetes-apt-keyring.asc] https://pkgs.k8s.io/core:/stable:/v{{ k8s_version }}/deb/ /"
+    state: present
+    filename: kubernetes
+
+- name: 13. kubelet, kubeadm, kubectl をインストール
+  apt:
+    name:
+      - "kubelet={{ k8s_apt_version }}"
+      - "kubeadm={{ k8s_apt_version }}"
+      - "kubectl={{ k8s_apt_version }}"
+    state: present
+    update_cache: yes
+
+- name: 14. パッケージの自動更新を固定 (hold)
+  dpkg_selections:
+    name: "{{ item }}"
+    selection: hold
+  loop:
+    - kubelet
+    - kubeadm
+    - kubectl
+
+- name: 15. kubelet サービスを有効化
+  systemd:
+    name: kubelet
+    enabled: yes

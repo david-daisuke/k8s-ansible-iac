@@ -1,0 +1,9 @@
+---
+- name: 1. Workerノードが参加済みかチェック
+  stat:
+    path: /etc/kubernetes/kubelet.conf
+  register: kubelet_conf_stat
+
+- name: 2. クラスタにJoin実行
+  command: "{{ hostvars[groups['control_plane'][0]]['join_command'] }}"
+  when: not kubelet_conf_stat.stat.exists

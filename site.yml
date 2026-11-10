@@ -1,0 +1,18 @@
+---
+- name: Execute Common Setup on All Nodes
+  hosts: k8s_cluster
+  become: true
+  roles:
+    - common
+
+- name: Setup Control Plane Node
+  hosts: control_plane
+  become: true
+  roles:
+    - control_plane
+
+- name: Join Worker Nodes to Cluster
+  hosts: workers
+  become: true
+  roles:
+    - worker

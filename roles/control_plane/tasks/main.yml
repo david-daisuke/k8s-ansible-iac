@@ -1,0 +1,44 @@
+---
+- name: 1. クラスタ初期化済みかチェック
+  stat:
+    path: /etc/kubernetes/admin.conf
+  register: k8s_init_stat
+
+- name: 2. kubeadm init を実行してControl Planeを初期化
+  command: >
+    kubeadm init
+    --apiserver-advertise-address={{ control_plane_ip }}
+    --pod-network-cidr={{ pod_network_cidr }}
+    --kubernetes-version=v{{ k8s_version }}.0
+  when: not k8s_init_stat.stat.exists
+
+- name: 3. david ユーザー用 .kube ディレクトリを作成
+  file:
+    path: "/home/david/.kube"
+    state: directory
+    owner: david
+    group: david
+    mode: '0755'
+
+- name: 4. admin.conf を david ユーザーの config へコピー
+  copy:
+    src: /etc/kubernetes/admin.conf
+    dest: "/home/david/.kube/config"
+    remote_src: yes
+    owner: david
+    group: david
+    mode: '0600'
+
+- name: 5. Calico CNI マニフェストをデプロイ
+  command: kubectl apply -f https://raw.githubusercontent.com/projectcalico/calico/v3.27.3/manifests/calico.yaml
+  environment:
+    KUBECONFIG: /etc/kubernetes/admin.conf
+  when: not k8s_init_stat.stat.exists
+
+- name: 6. Workerノード用 Join コマンドを生成
+  command: kubeadm token create --print-join-command
+  register: join_command_raw
+
+- name: 7. Join コマンドを変数として保持
+  set_fact:
+    join_command: "{{ join_command_raw.stdout }}"
